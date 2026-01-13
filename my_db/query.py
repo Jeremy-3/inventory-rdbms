@@ -19,6 +19,10 @@ def execute_query(parsed, db):
     
     elif query_type == "SELECT":
         return select_from(parsed, db)
+    elif query_type == "UPDATE":
+        return update_table(parsed, db)
+    elif query_type == "DELETE":
+        return delete_from(parsed, db)
     
     else:
         raise ValueError(f"Unknown query type: {query_type}")
@@ -165,3 +169,66 @@ def format_table(rows, selected_cols, all_columns):
     output.append(f"\n{len(rows)} row(s) returned.")
     
     return "\n".join(output)
+
+
+def update_table(parsed, db):
+    """UPDATE tablename SET col = value WHERE condition"""
+    table_name = parsed["table"]
+    column = parsed["column"]
+    value = parsed["value"]
+    where_clause = parsed.get("where")
+    
+    # Get table (case-insensitive)
+    table = db.get_table(table_name)
+    
+    if not table:
+        return f"Error: Table '{table_name}' does not exist"
+    
+    # Get all rows
+    all_rows = table["rows"]
+    
+    # Filter rows if WHERE clause exists
+    if where_clause:
+        rows_to_update = filter_rows(all_rows, where_clause)
+    else:
+        rows_to_update = all_rows
+    
+    # Check if no rows match
+    if not rows_to_update:
+        return "0 row(s) updated."
+    
+    # Update rows
+    updated_count = 0
+    for row in rows_to_update:
+        if column in row:
+            row[column] = value
+            updated_count += 1
+    
+    actual_name = db.get_table_name(table_name)
+    return f"✓ {updated_count} row(s) updated in '{actual_name}'."
+
+def delete_from(parsed, db):
+    """DELETE FROM tablename WHERE condition"""
+    table_name = parsed["table"]
+    where_clause = parsed.get("where")
+    
+    # Use case-insensitive lookup
+    table = db.get_table(table_name)
+    
+    if not table:
+        return f"Error: Table '{table_name}' does not exist"
+    
+    rows = table["rows"]
+    
+    # Filter by WHERE clause if present
+    if where_clause:
+        rows_to_delete = filter_rows(rows, where_clause)
+    else:
+        rows_to_delete = rows
+    
+    # Delete rows
+    for row in rows_to_delete:
+        rows.remove(row)
+    
+    actual_name = db.get_table_name(table_name)
+    return f"✓ {len(rows_to_delete)} row(s) deleted from '{actual_name}'."

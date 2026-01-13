@@ -30,11 +30,19 @@ def parse(command: str):
     
     # INSERT INTO
     elif command_type == "INSERT" and len(tokens) > 1 and tokens[1].upper() == "INTO":
-        return parse_insert(command)  # PASS command here!
+        return parse_insert(command)  
     
     # SELECT
     elif command_type == "SELECT":
-        return parse_select(command)  # PASS command here!
+        return parse_select(command)  
+    
+    # UPDATE
+    elif command_type == "UPDATE":
+        return parse_update(command)
+    
+    # DELETE
+    elif command_type == "DELETE":
+        return parse_delete(command)
     
     else:
         raise ValueError(f"Unknown command: {command_type}")
@@ -187,3 +195,82 @@ def parse_select(command):
     
     except Exception as e:
         raise ValueError(f"Error parsing SELECT: {e}")
+
+
+def parse_update(command):
+    """
+    Parse: UPDATE tablename SET col = value WHERE condition
+    Example: UPDATE suppliers SET email = 'new@email.com' WHERE id = 1
+    """
+    try:
+        command_upper = command.upper()
+        
+        if "SET" not in command_upper:
+            raise ValueError("Missing SET keyword")
+        
+        # Extract table name (between UPDATE and SET)
+        update_to_set = command[:command_upper.index("SET")].strip()
+        table_name = update_to_set.replace("UPDATE", "").replace("update", "").strip()
+        
+        # Get everything after SET
+        set_start = command_upper.index("SET") + 3
+        rest = command[set_start:].strip()
+        
+        # Check for WHERE clause
+        where_clause = None
+        if "WHERE" in rest.upper():
+            where_index = rest.upper().index("WHERE")
+            set_clause = rest[:where_index].strip()
+            where_clause = rest[where_index + 5:].strip()
+        else:
+            set_clause = rest
+        
+        # Parse SET clause: "email = 'new@email.com'"
+        if "=" not in set_clause:
+            raise ValueError("Invalid SET clause format")
+        
+        set_parts = set_clause.split("=", 1)  # Split only on first =
+        column = set_parts[0].strip()
+        value = set_parts[1].strip().strip("'\"")
+        
+        return {
+            "type": "UPDATE",
+            "table": table_name,
+            "column": column,
+            "value": value,
+            "where": where_clause
+        }
+    
+    except Exception as e:
+        raise ValueError(f"Error parsing UPDATE: {str(e)}")
+
+
+def parse_delete(command):
+    """
+    Parse: DELETE FROM tablename WHERE condition
+    Example: DELETE FROM suppliers WHERE id = 1
+    """
+    try:
+        command_upper = command.upper()
+        
+        if "FROM" not in command_upper:
+            raise ValueError("Missing FROM keyword")
+        
+        parts = command_upper.split("FROM")
+        table_part = parts[1].strip().split("WHERE")
+        table_name = table_part[0].strip()
+        
+        where_clause = None
+        if len(table_part) > 1:
+            # Get WHERE clause from original command
+            where_index = command.upper().index("WHERE") + 5
+            where_clause = command[where_index:].strip()
+        
+        return {
+            "type": "DELETE",
+            "table": table_name,
+            "where": where_clause
+        }
+    
+    except Exception as e:
+        raise ValueError(f"Error parsing DELETE: {e}")
