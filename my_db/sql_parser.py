@@ -47,7 +47,8 @@ def parse(command: str):
     # delete table
     elif command_type == "DROP" and len(tokens) > 1 and tokens[1].upper() == "TABLE":
         return parse_drop_table(command)
-    
+    elif command_type == "CREATE" and tokens[1].upper() == "INDEX":
+        return parse_create_index(command)
     else:
         raise ValueError(f"Unknown command: {command_type}")
 
@@ -182,7 +183,7 @@ def parse_select(command):
         
         # Extract table name and WHERE clause
         table_part = parts[1].strip().split("WHERE")
-        table_name = table_part[0].strip()
+        table_name = table_part[0].strip().lower()
         
         where_clause = None
         if len(table_part) > 1:
@@ -297,4 +298,28 @@ def parse_drop_table(command):
     except Exception as e:
         raise ValueError(f"Error parsing DROP TABLE: {e}")
     
-    
+
+# indexing tables 
+def parse_create_index(command):
+    """
+    Parse: CREATE INDEX indexname ON tablename(column)
+    """
+    try:
+        parts = command.split()
+        index_name = parts[2]
+
+        on_part = command.upper().split("ON", 1)[1].strip()
+        table_part, column_part = on_part.split("(", 1)
+
+        table_name = table_part.strip()
+        column = column_part.rstrip(")").strip()
+
+        return {
+            "type": "CREATE_INDEX",
+            "table": table_name,
+            "index_name": index_name,
+            "column": column
+        }
+
+    except Exception as e:
+        raise ValueError(f"Error parsing CREATE INDEX: {e}")

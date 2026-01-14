@@ -1,5 +1,6 @@
 # my_db/query.py
 import re
+from my_db.index import create_index,update_indexes_on_insert,update_indexes_on_delete,update_indexes_on_update
 
 def execute_query(parsed, db):
     """Execute parsed SQL commands"""
@@ -29,6 +30,14 @@ def execute_query(parsed, db):
     
     elif query_type == "DROP_TABLE":
         return drop_table(parsed, db)
+    
+    elif query_type == "CREATE_INDEX":
+        return create_index(
+            db,
+            parsed["table"],
+            parsed["index_name"],
+            parsed["column"]
+        )
     else:
         raise ValueError(f"Unknown query type: {query_type}")
 
@@ -63,12 +72,13 @@ def insert_into(parsed, db):
     # Create row as dictionary
     row = {}
     for i, col in enumerate(table["columns"]):
+        col_name = col["name"].lower()
         row[col["name"]] = values[i] if i < len(values) else None
 
     # check PRIMARY KEY constraint
     for col in table["columns"]:
         if col.get("primary_key"):
-            pk_col = col["name"]
+            pk_col = col["name"].lower()
             pk_value = row[pk_col]
 
             for existing_row in table["rows"]:
@@ -79,7 +89,7 @@ def insert_into(parsed, db):
     # check unique constraints
     for col in table["columns"]:
         if col.get("unique"):
-            unique_col = col["name"]
+            unique_col = col["name"].lower()
             unique_value = row[unique_col]
 
             for existing_row in table["rows"]:
@@ -88,8 +98,11 @@ def insert_into(parsed, db):
                     return f"Error: Duplicate UNIQUE value '{unique_value}' for column '{unique_col}' in table '{actual_name}'"
     
     table["rows"].append(row)
+
+    update_indexes_on_insert(db,table_name,row)
     
     actual_name = db.get_table_name(table_name)
+                
     return f"✓ 1 row inserted into '{actual_name}'."
 
 
@@ -108,8 +121,17 @@ def select_from(parsed, db):
     rows = table["rows"]
     
     # Filter by WHERE clause if present
+    # if where_clause:
+    #     rows = filter_rows(rows, where_clause)
     if where_clause:
-        rows = filter_rows(rows, where_clause)
+        indexed_rows = try_index_lookup(db, table_name, where_clause)
+        if indexed_rows is not None:
+            rows = indexed_rows
+            print(f"[DEBUG] Used index on {table_name}")
+        else:
+            rows = filter_rows(rows, where_clause)
+            print("[DEBUG] Full table scan")
+            print("[DEBUG] Available indexes:", db.indexes)
     
     # Format output
     if not rows:
@@ -117,6 +139,34 @@ def select_from(parsed, db):
     
     # Print table
     return format_table(rows, columns, table["columns"])
+
+def try_index_lookup(db, table_name, where_clause):
+    if "=" not in where_clause:
+        return None  # Only handle equality for index lookup
+    
+    #column, value = where_clause.split("=", 1)
+
+    parts = where_clause.split("=",1)
+    if len(parts) !=2:
+        return None
+    
+    column, value = parts
+    column = column.strip().lower()
+    value = value.strip().strip("'\"")  # Remove quotes if any
+
+    table_key = table_name.lower()
+    table_indexes = db.indexes.get(table_key)
+
+    if not table_indexes:
+        return None
+
+    index = table_indexes.get(column)
+
+    if not index:
+        return None  # No index found for this column
+    
+    return index["map"].get(value, [])
+
 
 
 def show_tables(db):
@@ -160,52 +210,61 @@ def describe_table(parsed, db):
 
 
 def filter_rows(rows, where_clause):
-    """Simple WHERE filtering with multiple operators)"""
-    # determine operator
-    if ">=" in where_clause:
-        operator = ">="
-    elif "<=" in where_clause:
-        operator = "<="
-    elif "!=" in where_clause or "<>" in where_clause:
-        operator = "!="
-    elif "=" in where_clause:
-        operator = "="
-    elif ">" in where_clause:
-        operator = ">"  
-    elif "<" in where_clause:
-        operator = "<"
-    elif "LIKE" in where_clause.upper():
+    """Enhanced WHERE filtering with multiple operators"""
+    
+    where_upper = where_clause.upper()
+
+    if "LIKE" in where_upper:
         operator = "LIKE"
         parts = where_clause.split(" LIKE ", 1) if " LIKE " in where_clause else where_clause.split(" like ", 1)
+    elif ">=" in where_clause:
+        operator = ">="
+        parts = where_clause.split(">=")
+    elif "<=" in where_clause:
+        operator = "<="
+        parts = where_clause.split("<=")
+    elif "!=" in where_clause:
+        operator = "!="
+        parts = where_clause.split("!=")
+    elif "<>" in where_clause:
+        operator = "!="
+        parts = where_clause.split("<>")
+    elif ">" in where_clause:
+        operator = ">"
+        parts = where_clause.split(">")
+    elif "<" in where_clause:
+        operator = "<"
+        parts = where_clause.split("<")
+    elif "=" in where_clause:
+        operator = "="
+        parts = where_clause.split("=")
     else:
-        raise ValueError(f"Unsupported WHERE clause operator in: {where_clause}")
+        raise ValueError(f"Unsupported WHERE operator in: {where_clause}")
     
-    # Split condition
-    # if operator == "LIKE":
-    #     parts = where_clause.split("LIKE")
-    # else:
-    #     parts = where_clause.split(operator)
-
     col_name = parts[0].strip()
-    value = parts[1].strip().strip("'\"")  # Remove quotes if any
-
-    # Filter rows based on operator
+    value = parts[1].strip().strip("'\"")
+    
+    # Filter based on operator
     filtered = []
     for row in rows:
         row_value = str(row.get(col_name, ""))
+        
         if operator == "=":
             if row_value == value:
                 filtered.append(row)
+        
         elif operator == "!=":
             if row_value != value:
                 filtered.append(row)
+        
         elif operator == ">":
             try:
                 if float(row_value) > float(value):
                     filtered.append(row)
             except ValueError:
-                if row_value > value: 
+                if row_value > value:
                     filtered.append(row)
+        
         elif operator == "<":
             try:
                 if float(row_value) < float(value):
@@ -213,6 +272,7 @@ def filter_rows(rows, where_clause):
             except ValueError:
                 if row_value < value:
                     filtered.append(row)
+        
         elif operator == ">=":
             try:
                 if float(row_value) >= float(value):
@@ -220,6 +280,7 @@ def filter_rows(rows, where_clause):
             except ValueError:
                 if row_value >= value:
                     filtered.append(row)
+        
         elif operator == "<=":
             try:
                 if float(row_value) <= float(value):
@@ -227,12 +288,13 @@ def filter_rows(rows, where_clause):
             except ValueError:
                 if row_value <= value:
                     filtered.append(row)
+        
         elif operator == "LIKE":
             pattern = value.replace("%", ".*").replace("_", ".")
             if re.search(f"^{pattern}$", row_value, re.IGNORECASE):
                 filtered.append(row)
+    
     return filtered
-
 
 def format_table(rows, selected_cols, all_columns):
     """Format rows as a pretty table"""
@@ -290,14 +352,16 @@ def update_table(parsed, db):
         return "0 row(s) updated."
     
     # Update rows
-    updated_count = 0
-    for row in rows_to_update:
-        if column in row:
-            row[column] = value
-            updated_count += 1
+    # updated_count = 0
+    # for row in rows_to_update:
+    #     if column in row:
+    #         row[column] = value
+    #         updated_count += 1
+
+    update_indexes_on_update(db, table_name,rows_to_update,column,value)
     
     actual_name = db.get_table_name(table_name)
-    return f"✓ {updated_count} row(s) updated in '{actual_name}'."
+    return f"✓ {len(rows_to_update)} row(s) updated in '{actual_name}'."
 
 def delete_from(parsed, db):
     """DELETE FROM tablename WHERE condition"""
@@ -317,6 +381,8 @@ def delete_from(parsed, db):
         rows_to_delete = filter_rows(rows, where_clause)
     else:
         rows_to_delete = rows
+
+    update_indexes_on_delete(db,table_name,rows_to_delete)
     
     # Delete rows
     for row in rows_to_delete:

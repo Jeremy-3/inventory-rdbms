@@ -5,6 +5,7 @@ class Database:
     def __init__(self):
         # self.parser = Parser()
         self.tables = {}
+        self.indexes = {}
 
     def execute(self, command:str):
         parsed_command = parse(command)
