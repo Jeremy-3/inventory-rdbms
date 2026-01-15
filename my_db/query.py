@@ -55,7 +55,8 @@ def create_table(parsed, db):
     
     db.tables[table_name] = {
         "columns": columns,
-        "rows": []
+        "rows": [],
+        "foreign_keys":parsed.get("foreign_keys",[])
     }
     
     return f"✓ Table '{table_name}' created successfully."
@@ -75,13 +76,12 @@ def insert_into(parsed, db):
     # Create row as dictionary
     row = {}
     for i, col in enumerate(table["columns"]):
-        col_name = col["name"].lower()
         row[col["name"]] = values[i] if i < len(values) else None
 
     # check PRIMARY KEY constraint
     for col in table["columns"]:
         if col.get("primary_key"):
-            pk_col = col["name"].lower()
+            pk_col = col["name"]
             pk_value = row[pk_col]
 
             for existing_row in table["rows"]:
@@ -92,14 +92,40 @@ def insert_into(parsed, db):
     # check unique constraints
     for col in table["columns"]:
         if col.get("unique"):
-            unique_col = col["name"].lower()
+            unique_col = col["name"]
             unique_value = row[unique_col]
 
             for existing_row in table["rows"]:
                 if existing_row.get(unique_col) == unique_value:
                     actual_name = db.get_table_name(table_name)
                     return f"Error: Duplicate UNIQUE value '{unique_value}' for column '{unique_col}' in table '{actual_name}'"
-    
+    # check for foreign key constraints
+    for col in table["columns"]:
+        fk = col.get("foreign_key")
+        if fk:
+            fk_value = row[col["name"]]
+            
+            # Skip NULL values (FK can be optional)
+            if fk_value is None or str(fk_value).upper() == "NULL":
+                continue
+            
+            # Get referenced table
+            ref_table = db.get_table(fk["ref_table"])
+            if not ref_table:
+                return f"Error: Referenced table '{fk['ref_table']}' does not exist"
+            
+            # Check if the foreign key value exists in referenced table
+            ref_col = fk["ref_column"]
+            value_exists = False
+            
+            for ref_row in ref_table["rows"]:
+                if str(ref_row.get(ref_col)) == str(fk_value):
+                    value_exists = True
+                    break
+            
+            if not value_exists:
+                return f"Error: FOREIGN KEY constraint violated - value '{fk_value}' not found in {fk['ref_table']}.{ref_col}"
+            
     table["rows"].append(row)
 
     update_indexes_on_insert(db,table_name,row)
@@ -232,27 +258,41 @@ def show_tables(db):
 
 
 def describe_table(parsed, db):
-    """Describe table structure"""
-    table_name = parsed["table"]
+    """Describe table structure including PK, UNIQUE, and FOREIGN KEY"""
+    table_name = parsed.get("table")
     
-    # Use case-insensitive lookup
+    if not table_name:
+        return "Error: Missing table name"
+    
     table = db.get_table(table_name)
-    
     if not table:
         return f"Error: Table '{table_name}' does not exist"
     
     actual_name = db.get_table_name(table_name)
     columns = table["columns"]
     
-    output = [f"\nTable: {actual_name}", "-" * 50]
+    output = [f"\nTable: {actual_name}", "=" * 70]
     output.append(f"{'Column':<20} {'Type':<15} {'Constraints'}")
-    output.append("-" * 50)
+    output.append("=" * 70)
     
     for col in columns:
-        constraints = "PRIMARY KEY" if col.get("primary_key") else ""
-        output.append(f"{col['name']:<20} {col['type']:<15} {constraints}")
+        constraints = []
+        
+        if col.get("primary_key"):
+            constraints.append("PRIMARY KEY")
+        
+        if col.get("unique"):
+            constraints.append("UNIQUE")
+        
+        # Check for FK
+        fk = col.get("foreign_key")
+        if fk:
+            constraints.append(f"FK → {fk['ref_table']}.{fk['ref_column']}")
+        
+        constraint_str = ", ".join(constraints) if constraints else "-"
+        output.append(f"{col['name']:<20} {col['type']:<15} {constraint_str}")
     
-    output.append("-" * 50)
+    output.append("=" * 70)
     output.append(f"Total rows: {len(table['rows'])}")
     
     return "\n".join(output)
@@ -425,30 +465,59 @@ def delete_from(parsed, db):
     """DELETE FROM tablename WHERE condition"""
     table_name = parsed["table"]
     where_clause = parsed.get("where")
-    
-    # Use case-insensitive lookup
+
     table = db.get_table(table_name)
-    
     if not table:
         return f"Error: Table '{table_name}' does not exist"
-    
+
     rows = table["rows"]
-    
-    # Filter by WHERE clause if present
+
+    # Determine rows to delete (ALWAYS COPY)
     if where_clause:
         rows_to_delete = filter_rows(rows, where_clause)
     else:
-        rows_to_delete = rows
+        rows_to_delete = rows[:]
 
-    update_indexes_on_delete(db,table_name,rows_to_delete)
-    
-    # Delete rows
+    if not rows_to_delete:
+        return "0 row(s) deleted."
+
+    # === FOREIGN KEY HANDLING (ON DELETE SET NULL) ===
+    for other_table_name, other_table in db.tables.items():
+        for col in other_table["columns"]:
+            fk = col.get("foreign_key")
+            if not fk:
+                continue
+
+            if fk["ref_table"] != table_name:
+                continue
+
+            fk_column = col["name"]
+            ref_column = fk["ref_column"]
+
+            for deleted_row in rows_to_delete:
+                deleted_value = deleted_row.get(ref_column)
+
+                for row in other_table["rows"]:
+                    if row.get(fk_column) == deleted_value:
+                        row[fk_column] = None
+
+                        update_indexes_on_update(
+                            db,
+                            other_table_name,
+                            [row],
+                            fk_column,
+                            None
+                        )
+
+    # Update indexes for deleted rows
+    update_indexes_on_delete(db, table_name, rows_to_delete)
+
+    # Delete rows safely
     for row in rows_to_delete:
         rows.remove(row)
-    
+
     actual_name = db.get_table_name(table_name)
     return f"✓ {len(rows_to_delete)} row(s) deleted from '{actual_name}'."
-
 
 def drop_table(parsed, db): 
     """DROP TABLE tablename"""

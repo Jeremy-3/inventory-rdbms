@@ -57,54 +57,101 @@ def parse_create_table(command):
     """
     Parse: CREATE TABLE tablename (col1 TYPE, col2 TYPE, ...)
     Example: CREATE TABLE suppliers (id INT PRIMARY KEY, name VARCHAR, email VARCHAR)
+    Parse: CREATE TABLE with PRIMARY KEY, UNIQUE, and FOREIGN KEY
+    Example: CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR, supplier_id INT FOREIGN KEY REFERENCES suppliers(id))
     """
     try:
-        # Split by opening parenthesis
+        command = command.strip().rstrip(";")
+
         if "(" not in command:
             raise ValueError("Missing column definitions in parentheses")
         
-        # Extract table name
-        parts = command.split("(", 1)
-        table_part = parts[0].strip().split()
+        # Split table name and column definitions
+        head, body = command.split("(", 1)
+        table_name = head.split()[2].lower()
         
-        if len(table_part) < 3:
-            raise ValueError("Invalid CREATE TABLE syntax")
+        # Remove trailing semicolon and closing parenthesis
+        last_paren_idx = body.rfind(")")
+        if last_paren_idx == -1:
+            raise ValueError("Missing closing parenthesis")
         
-        table_name = table_part[2]  # CREATE TABLE [name]
+        columns_str = body[:last_paren_idx].strip()
         
-        # Extract columns definition
-        columns_str = parts[1].rstrip(");").strip()
         
-        # Split columns by comma
-        column_defs = [col.strip() for col in columns_str.split(",")]
+        column_defs = []
+        current_def = ""
+        paren_depth = 0
+        
+        for char in columns_str:
+            if char == '(':
+                paren_depth += 1
+                current_def += char
+            elif char == ')':
+                paren_depth -= 1
+                current_def += char
+            elif char == ',' and paren_depth == 0:
+                column_defs.append(current_def.strip())
+                current_def = ""
+            else:
+                current_def += char
+        
+        # Don't forget the last column
+        if current_def.strip():
+            column_defs.append(current_def.strip())
         
         columns = []
+        foreign_keys = []
+        
         for col_def in column_defs:
-            tokens = col_def.split()
+            tokens = col_def.strip().split()
             
             if len(tokens) < 2:
                 raise ValueError(f"Invalid column definition: {col_def}")
             
             col_name = tokens[0]
             col_type = tokens[1].upper()
+            col_def_upper = col_def.upper()
             
-            # Check for PRIMARY KEY
-            is_primary = "PRIMARY" in col_def.upper() and "KEY" in col_def.upper()
+            is_primary = "PRIMARY KEY" in col_def_upper or "PRIMARY" in col_def_upper and "KEY" in col_def_upper
+            is_unique = "UNIQUE" in col_def_upper
             
-            # Check for UNIQUE
-            is_unique = "UNIQUE" in col_def.upper()
+            # Parse FOREIGN KEY
+            fk_info = None
+            if "REFERENCES" in col_def_upper:
+                # Extract: REFERENCES suppliers(id)
+                ref_part = col_def.split("REFERENCES", 1)[1].strip()
+                
+                if "(" not in ref_part or ")" not in ref_part:
+                    raise ValueError(f"Invalid FOREIGN KEY REFERENCES syntax in: {col_def}")
+                
+                # Parse table_name(column_name)
+                ref_table_name = ref_part.split("(")[0].strip().lower()
+                ref_column_name = ref_part.split("(")[1].split(")")[0].strip().lower()
+                
+                fk_info = {
+                    "ref_table": ref_table_name,
+                    "ref_column": ref_column_name
+                }
+                
+                foreign_keys.append({
+                    "column": col_name,
+                    "ref_table": ref_table_name,
+                    "ref_column": ref_column_name
+                })
             
             columns.append({
                 "name": col_name,
                 "type": col_type,
                 "primary_key": is_primary,
-                "unique": is_unique
+                "unique": is_unique,
+                "foreign_key": fk_info  
             })
         
         return {
             "type": "CREATE_TABLE",
             "table": table_name,
-            "columns": columns
+            "columns": columns,
+            "foreign_keys": foreign_keys
         }
     
     except Exception as e:
