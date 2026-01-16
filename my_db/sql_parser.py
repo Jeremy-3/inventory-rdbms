@@ -217,16 +217,16 @@ def parse_select(command):
     Parse: SELECT * FROM tablename JOIN table2 ON a = b
     """
     try:
-        # command = command.rstrip(";").strip()
         command_upper = command.upper()
         
         if "FROM" not in command_upper:
             raise ValueError("Missing FROM keyword")
         
-        #parts = command_upper.split("FROM")
+        # select section - use original command to preserve case in WHERE
+        from_index = command_upper.index("FROM")
+        select_part = command[:from_index].upper()
+        rest = command[from_index + 4:].strip()  # Get the part after FROM
         
-        # select section
-        select_part, rest = command_upper.split("FROM",1)
         columns_str = select_part.replace("SELECT","").strip()
         columns = ("*" if columns_str == "*" else [c.strip() for c in columns_str.split(",")])
 
@@ -237,11 +237,17 @@ def parse_select(command):
 
         # join section
         if "JOIN" in rest_upper:
-            from_part ,join_part = rest.split("JOIN",1)
-            base_table = from_part.strip().lower()
+            join_index = rest_upper.index("JOIN")
+            from_part = rest[:join_index].strip()
+            join_part = rest[join_index + 4:].strip()
+            
+            base_table = from_part.lower()
 
-            join_table_part , on_part = join_part.split("ON",1)
-            join_table = join_table_part.strip().lower()
+            on_index = rest_upper.index("ON")
+            join_table_part = rest[join_index + 4:on_index].strip()
+            on_part = rest[on_index + 2:].strip()
+            
+            join_table = join_table_part.lower()
 
             if "=" not in on_part:
                 raise ValueError("JOIN condition must use '=' ")
@@ -254,7 +260,13 @@ def parse_select(command):
                 "right":right_expr.strip().lower()
             }
         else:
-            base_table = rest.strip().lower()
+            # Extract table name from rest, handling WHERE clause
+            if "WHERE" in rest_upper:
+                where_index = rest_upper.index("WHERE")
+                base_table = rest[:where_index].strip().lower()
+                where = rest[where_index + 5:].strip()  # Extract original case WHERE clause
+            else:
+                base_table = rest.strip().lower()
 
         return{
             "type":"SELECT",
